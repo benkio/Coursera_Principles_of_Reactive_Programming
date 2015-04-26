@@ -13,8 +13,8 @@ object Polynomial {
     Signal(
         delta() match {
           case _ if delta() < 0 => Set()
-          case _ if delta() == 0 => Set((-b()/2*a()))
-          case _ if delta() > 0 => Set(((-b()+Math.sqrt(delta()))/2*a()),((-b()-Math.sqrt(delta()))/2*a()))
+          case _ if delta() == 0 => Set(( (-b()) / (2*a()) ))
+          case _ if delta() > 0 => Set((( (-b()) + (Math.sqrt(delta())) )/(2*a()) ),( ( (-b()) - (Math.sqrt(delta()))) / (2*a())))
         }
     )
   }

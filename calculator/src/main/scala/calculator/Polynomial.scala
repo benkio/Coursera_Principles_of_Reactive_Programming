@@ -10,12 +10,16 @@ object Polynomial {
 
   def computeSolutions(a: Signal[Double], b: Signal[Double],
       c: Signal[Double], delta: Signal[Double]): Signal[Set[Double]] = {
-    Signal(
-        delta() match {
-          case _ if delta() < 0 => Set()
-          case _ if delta() == 0 => Set(( (-b()) / (2*a()) ))
-          case _ if delta() > 0 => Set((( (-b()) + (Math.sqrt(delta())) )/(2*a()) ),( ( (-b()) - (Math.sqrt(delta()))) / (2*a())))
+    Signal({
+      val d = delta()
+         d match {
+          case _ if d < 0 	=> Set()
+          case _ if d == 0 	=> Set(( (-b()) / (2*a()) ))
+          case _ if d > 0 	=> {
+            val notDelta = (-b()) / (2*a())
+            val deltaDivided = (Math.sqrt(delta()))/(2*a())
+            Set((notDelta + deltaDivided),( notDelta - deltaDivided ))}
         }
-    )
+    })
   }
 }

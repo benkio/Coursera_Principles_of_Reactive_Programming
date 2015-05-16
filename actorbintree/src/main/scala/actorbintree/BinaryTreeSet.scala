@@ -7,6 +7,7 @@ import akka.actor._
 import scala.collection.immutable.Queue
 import actorbintree.Insert
 import actorbintree.OperationFinished
+import actorbintree.CopyTo
 
 object BinaryTreeSet {
 
@@ -107,33 +108,58 @@ class BinaryTreeNode(val elem: Int, initiallyRemoved: Boolean) extends Actor {
   var subtrees = Map[Position, ActorRef]()
   var removed = initiallyRemoved
 
+  def addNewActorChild(p: Position, elem: Int, initiallyRemoved: Boolean) = (p -> context.actorOf(BinaryTreeNode.props(elem, initiallyRemoved)))
+  def leftNode = subtrees.get(Left)
+  def rightNode = subtrees.get(Right)
   // optional
   def receive = normal
 
   // optional
   /** Handles `Operation` messages and `CopyTo` requests. */
   val normal: Receive = {
-    case Insert(requester: ActorRef, id: Int, e: Int) => (e, subtrees.filter(_._1 == BinaryTreeNode.Left).isEmpty, subtrees.filter(_._1 == BinaryTreeNode.Right).isEmpty) match {
-      case (b, l, _) if b < elem => if (l) {
+    case Insert(requester: ActorRef, id: Int, e: Int) => (e, leftNode, rightNode) match {
+      case (b, l, _) if b < elem => if (l.isEmpty) {
         subtrees += addNewActorChild(BinaryTreeNode.Left, e, false)
         requester ! OperationFinished(id)
-      } else subtrees.filter(_._1 == BinaryTreeNode.Left).map(_._2 forward Insert)
+      } else l.get forward Insert
 
-      case (a, _, r) if a > elem => if (r) {
-        subtrees += addNewActorChild(BinaryTreeNode.Right, e, false)
+      case (a, _, r) if a > elem =>
+        if (r.isEmpty) {
+          subtrees += addNewActorChild(BinaryTreeNode.Right, e, false)
+          requester ! OperationFinished(id)
+        } else r.get forward Insert
+
+      case _ =>
+        if (removed) removed = false
         requester ! OperationFinished(id)
-      } else subtrees.filter(_._1 == BinaryTreeNode.Right).map(_._2 forward Insert)
-
-      case _ => requester ! OperationFinished(id)
     }
 
-    case Contains(requester: ActorRef, id: Int, e: Int) => (e, subtrees.filter(_._1 == BinaryTreeNode.Left).isEmpty, subtrees.filter(_._1 == BinaryTreeNode.Right).isEmpty) match {
-      case (b, l, _) if b < elem => if (l) subtrees.filter(_._1 == BinaryTreeNode.Left).map(_._2 forward Contains) else requester ! ContainsResult(id, false)
-      case (a, _, r) if a > elem => if (r) subtrees.filter(_._1 == BinaryTreeNode.Right).map(_._2 forward Contains) else requester ! ContainsResult(id, false)
-      case elem => requester ! ContainsResult(id, true)
+    case Contains(requester: ActorRef, id: Int, e: Int) => (e, leftNode, rightNode) match {
+      case (b, l, _) if b < elem => if (l.isEmpty) requester ! ContainsResult(id, false) else l.get forward Contains
+      case (a, _, r) if a > elem => if (r.isEmpty) requester ! ContainsResult(id, false) else r.get forward Contains
+      case elem => if (removed) requester ! ContainsResult(id, false) else requester ! ContainsResult(id, true)
     }
-    case Remove => ???
-    case CopyTo => ???
+    case Remove(requester: ActorRef, id: Int, e: Int) => (e, leftNode, rightNode) match {
+      case (b, l, _) if b < elem => if (l.isEmpty) requester ! OperationFinished(id) else l.get forward Remove
+      case (a, _, r) if a > elem => if (r.isEmpty) requester ! OperationFinished(id) else r.get forward Remove
+      case elem =>
+        if (removed)
+          requester ! OperationFinished(id)
+        else {
+          removed = true
+          requester ! OperationFinished(id)
+        }
+    }
+
+    case CopyTo(treeNode) => 
+      if (subtrees.isEmpty && removed) 
+        sender ! CopyFinished
+      else {
+        val subtreesToCopy = subtrees.values
+        subtreesToCopy.foreach(_ ! CopyTo(treeNode))
+        if (!removed) treeNode ! Insert(self, -1,elem)
+        context.become(copying(subtreesToCopy.toSet, removed))
+      } 
   }
 
   // optional
@@ -141,7 +167,17 @@ class BinaryTreeNode(val elem: Int, initiallyRemoved: Boolean) extends Actor {
    * `expected` is the set of ActorRefs whose replies we are waiting for,
    * `insertConfirmed` tracks whether the copy of this node to the new tree has been confirmed.
    */
-  def copying(expected: Set[ActorRef], insertConfirmed: Boolean): Receive = ???
-
-  def addNewActorChild(p: Position, elem: Int, initiallyRemoved: Boolean) = (p -> context.actorOf(BinaryTreeNode.props(elem, initiallyRemoved)))
+  def copying(expected: Set[ActorRef], insertConfirmed: Boolean): Receive = {
+    case OperationFinished => 
+      if (expected.isEmpty)
+        context.parent ! CopyFinished
+      else
+        context.become(copying(expected,true))
+        
+    case CopyFinished =>
+      if (expected.size == 1 && insertConfirmed)
+        context.parent ! CopyFinished
+      else
+        context become copying(expected - sender, insertConfirmed)
+  }
 }

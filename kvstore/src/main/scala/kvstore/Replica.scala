@@ -46,6 +46,11 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
   // the current set of replicators
   var replicators = Set.empty[ActorRef]
 
+  override def preStart() ={
+    //Call the arbiter to join only on re first start of the actor Replica
+    arbiter ! Join  
+  }
+  
 
   def receive = {
     case JoinedPrimary   => context.become(leader)
@@ -54,6 +59,15 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
 
   /* TODO Behavior for  the leader role. */
   val leader: Receive = {
+    case Insert(key , value, id) => 
+      kv += key -> value
+      sender ! OperationAck(id)
+    case Remove(key,id) => 
+      kv -= key
+      sender ! OperationAck(id)
+    case Get(key,id) =>
+      val value = kv.get(key)
+      sender ! GetResult(key,value,id)
     case _ =>
   }
 

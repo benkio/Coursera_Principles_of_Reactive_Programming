@@ -45,7 +45,9 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
   var secondaries = Map.empty[ActorRef, ActorRef]
   // the current set of replicators
   var replicators = Set.empty[ActorRef]
-
+  // used to check the replicator sequence
+  var expectedReplicatorSequence : Long = 0
+  
   override def preStart() ={
     //Call the arbiter to join only on re first start of the actor Replica
     arbiter ! Join  
@@ -73,6 +75,21 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
 
   /* TODO Behavior for the replica role. */
   val replica: Receive = {
+    case Get(key,id) =>
+      val value = kv.get(key)
+      sender ! GetResult(key,value,id)
+    case Snapshot(key, valueOption, seq) =>
+      if (seq < expectedReplicatorSequence){
+        sender ! SnapshotAck(key, seq)
+      }
+      if (seq == expectedReplicatorSequence){
+        valueOption match {
+          case Some(v) => kv += key -> v
+          case None => kv -= key
+        }
+        sender ! SnapshotAck(key, seq)
+        expectedReplicatorSequence = (seq+1)
+      }
     case _ =>
   }
 

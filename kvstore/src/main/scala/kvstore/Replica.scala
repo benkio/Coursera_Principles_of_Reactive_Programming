@@ -63,19 +63,32 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
 
   /* TODO Behavior for  the leader role. */
   var primaryPersistingAcks = Map.empty[Long, (ActorRef, Cancellable)]
-  
+  var replicatorAcks = Map.empty[Long,(ActorRef, Set[ActorRef])]
   val leader: Receive = {
     case Insert(key , value, id) => 
       kv += key -> value
       primaryPersistingAcks += id -> (sender, system.scheduler.schedule(Duration.Zero, Duration.create(100, MILLISECONDS), persistenceActor, Persist(key, Some(value), id)))
 
+      if (!replicators.isEmpty){
+        replicators foreach {r =>
+          r ! Replicate(key, Some(value), id)
+        }
+        replicatorAcks += id -> (sender,replicators)
+      }
+      
       system.scheduler.scheduleOnce(1 second) {
         primaryPersistingAcks get id match {
           case Some((s, c)) =>
             c.cancel
             primaryPersistingAcks -= id
             s ! OperationFailed(id)
-          case None => {}
+          case None => 
+            replicatorAcks get id match {
+              case Some((s,rl)) =>
+                replicatorAcks -= id
+                s ! OperationFailed(id)
+              case None => {}  
+            }
         }
       }
       
@@ -83,13 +96,26 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
       kv -= key
       primaryPersistingAcks += id -> (sender, system.scheduler.schedule(Duration.Zero, Duration.create(100, MILLISECONDS), persistenceActor, Persist(key, None, id)))
       
+      if (!replicators.isEmpty){
+        replicators foreach {r =>
+          r ! Replicate(key, None, id)
+        }
+        replicatorAcks += id -> (sender,replicators)
+      }
+      
       system.scheduler.scheduleOnce(1 second) {
         primaryPersistingAcks get id match {
           case Some((s, c)) =>
             c.cancel
             primaryPersistingAcks -= id
             s ! OperationFailed(id)
-          case None => {}
+          case None => 
+            replicatorAcks get id match {
+              case Some((s,rl)) =>
+                replicatorAcks -= id
+                s ! OperationFailed(id)
+              case None => {}  
+            }
         }
       }
     case Get(key,id) =>
@@ -100,11 +126,29 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
         case Some((s,c)) => 
           c.cancel
           primaryPersistingAcks -= id
-          s ! OperationAck(id)
+          if (!(replicatorAcks contains(id)))
+            s ! OperationAck(id)
         case None => {}
       }
     case Replicated(key, id) =>
+      replicatorAcks get id match {
+        case Some((s,rl)) => 
+          val newList = rl - sender
+          replicatorAcks -= id
+          if (newList.isEmpty && !(primaryPersistingAcks contains id)){
+            s ! OperationAck(id)
+          }
+          else
+            replicatorAcks += id -> (s,newList)
+        case None => {}
+      }
     case Replicas(rl) => 
+      val allButMe = rl - self
+      allButMe foreach { a =>
+        val replicator = context.actorOf(Replicator.props(a))
+        secondaries += a -> replicator
+        replicators += replicator
+      }
   }
 
   

@@ -35,7 +35,8 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
   import Replicator._
   import Persistence._
   import context.dispatcher
-
+  import akka.actor.Cancellable
+  val system = akka.actor.ActorSystem("system")
   /*
    * The contents of this actor is just a suggestion, you can implement it in any way you like.
    */
@@ -45,9 +46,6 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
   var secondaries = Map.empty[ActorRef, ActorRef]
   // the current set of replicators
   var replicators = Set.empty[ActorRef]
-  // used to check the replicator sequence
-  var expectedReplicatorSequence : Long = 0
-  
   override def preStart() ={
     //Call the arbiter to join only on re first start of the actor Replica
     arbiter ! Join  
@@ -73,6 +71,11 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
     case _ =>
   }
 
+  
+  // used to check the replicator sequence
+  var expectedReplicatorSequence : Long = 0
+  val persistenceActor = context.actorOf(persistenceProps)
+  var secondaryPersistingAcks = Map.empty[Long, (ActorRef, Cancellable)]
   /* TODO Behavior for the replica role. */
   val replica: Receive = {
     case Get(key,id) =>
@@ -87,8 +90,16 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
           case Some(v) => kv += key -> v
           case None => kv -= key
         }
-        sender ! SnapshotAck(key, seq)
+        secondaryPersistingAcks += seq -> (sender, system.scheduler.schedule(Duration.Zero, Duration.create(100, MILLISECONDS), persistenceActor, Persist(key, valueOption, seq)))
         expectedReplicatorSequence = (seq+1)
+      }
+    case Persisted(key,id) =>
+      secondaryPersistingAcks.get(id) match {
+        case Some((replicator,cancellable)) =>
+          cancellable.cancel
+          secondaryPersistingAcks -= id
+          replicator ! SnapshotAck(key, id)
+        case None => {}
       }
     case _ =>
   }

@@ -148,6 +148,11 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
         val replicator = context.actorOf(Replicator.props(a))
         secondaries += a -> replicator
         replicators += replicator
+        
+        var c = 0
+        kv foreach { case (k,v) =>
+          replicator ! Replicate(k,Some(v),c)
+       }
       }
   }
 

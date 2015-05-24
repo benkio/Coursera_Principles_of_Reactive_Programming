@@ -144,6 +144,7 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
       }
     case Replicas(rl) => 
       val allButMe = rl - self
+      val removed = secondaries.keySet -- rl
       allButMe foreach { a =>
         val replicator = context.actorOf(Replicator.props(a))
         secondaries += a -> replicator
@@ -154,6 +155,16 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
           replicator ! Replicate(k,Some(v),c)
        }
       }
+      removed foreach { r =>
+        secondaries get r match {
+          case Some(replicator) =>
+            context.stop(replicator)
+            secondaries -= r
+            replicators -= replicator
+            
+          case None => {}
+        }
+        }
   }
 
   

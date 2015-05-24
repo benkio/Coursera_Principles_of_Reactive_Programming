@@ -4,6 +4,7 @@ import akka.actor.Props
 import akka.actor.Actor
 import akka.actor.ActorRef
 import scala.concurrent.duration._
+import akka.actor.Scheduler
 
 object Replicator {
   case class Replicate(key: String, valueOption: Option[String], id: Long)
@@ -19,26 +20,46 @@ class Replicator(val replica: ActorRef) extends Actor {
   import Replicator._
   import Replica._
   import context.dispatcher
-  
+  import akka.actor.Cancellable
+  val system = akka.actor.ActorSystem("system")
   /*
    * The contents of this actor is just a suggestion, you can implement it in any way you like.
    */
 
   // map from sequence number to pair of sender and request
-  var acks = Map.empty[Long, (ActorRef, Replicate)]
+  var acks = Map.empty[Long, (ActorRef, Replicate, Cancellable)]
   // a sequence of not-yet-sent snapshots (you can disregard this if not implementing batching)
   var pending = Vector.empty[Snapshot]
   
   var _seqCounter = 0L
+  
   def nextSeq = {
     val ret = _seqCounter
     _seqCounter += 1
     ret
   }
 
-  
   /* TODO Behavior for the Replicator. */
   def receive: Receive = {
+    case Replicate(key, valueOption, id) => 
+      val sequence = nextSeq
+      val snapshotToSend = Snapshot(key,valueOption,sequence)
+      replica ! snapshotToSend
+      val cancellable = system.scheduler.schedule(Duration.Zero, Duration.create(100, MILLISECONDS), replica, snapshotToSend);
+      acks += sequence -> (sender,Replicate(key, valueOption, id),cancellable)
+      
+    case SnapshotAck(key, seq) => 
+      val senderAndReplicate = acks.get(seq)
+      senderAndReplicate match {
+        case Some(v) => 
+          v match {
+            case (sender, Replicate(k,value,id),cancellable) => 
+              sender ! Replicated(k, id)
+              acks -= seq
+              cancellable.cancel
+          }
+        case None => {}
+      }
     case _ =>
   }
 

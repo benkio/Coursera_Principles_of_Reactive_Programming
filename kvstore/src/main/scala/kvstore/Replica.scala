@@ -68,9 +68,30 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
     case Insert(key , value, id) => 
       kv += key -> value
       primaryPersistingAcks += id -> (sender, system.scheduler.schedule(Duration.Zero, Duration.create(100, MILLISECONDS), persistenceActor, Persist(key, Some(value), id)))
+
+      system.scheduler.scheduleOnce(1 second) {
+        primaryPersistingAcks get id match {
+          case Some((s, c)) =>
+            c.cancel
+            primaryPersistingAcks -= id
+            s ! OperationFailed(id)
+          case None => {}
+        }
+      }
+      
     case Remove(key,id) => 
       kv -= key
       primaryPersistingAcks += id -> (sender, system.scheduler.schedule(Duration.Zero, Duration.create(100, MILLISECONDS), persistenceActor, Persist(key, None, id)))
+      
+      system.scheduler.scheduleOnce(1 second) {
+        primaryPersistingAcks get id match {
+          case Some((s, c)) =>
+            c.cancel
+            primaryPersistingAcks -= id
+            s ! OperationFailed(id)
+          case None => {}
+        }
+      }
     case Get(key,id) =>
       val value = kv.get(key)
       sender ! GetResult(key,value,id)

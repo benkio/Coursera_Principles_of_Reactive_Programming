@@ -42,25 +42,18 @@ class Replicator(val replica: ActorRef) extends Actor {
   /* TODO Behavior for the Replicator. */
   def receive: Receive = {
     case Replicate(key, valueOption, id) => 
-      val sequence = nextSeq
-      val snapshotToSend = Snapshot(key,valueOption,sequence)
-      replica ! snapshotToSend
-      val cancellable = system.scheduler.schedule(Duration.Zero, Duration.create(100, MILLISECONDS), replica, snapshotToSend);
+      val sequence = nextSeq 
+      val cancellable = system.scheduler.schedule(Duration.Zero, Duration.create(100, MILLISECONDS), replica, Snapshot(key,valueOption,sequence));
       acks += sequence -> (sender,Replicate(key, valueOption, id),cancellable)
       
-    case SnapshotAck(key, seq) => 
-      val senderAndReplicate = acks.get(seq)
-      senderAndReplicate match {
-        case Some(v) => 
-          v match {
-            case (sender, Replicate(k,value,id),cancellable) => 
+    case SnapshotAck(key, seq) =>  
+      acks.get(seq) match {
+        case Some((sender, Replicate(k,value,id),cancellable)) =>
               sender ! Replicated(k, id)
               acks -= seq
               cancellable.cancel
-          }
         case None => {}
       }
-    case _ =>
   }
 
 }

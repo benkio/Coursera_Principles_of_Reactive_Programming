@@ -46,6 +46,10 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
   var secondaries = Map.empty[ActorRef, ActorRef]
   // the current set of replicators
   var replicators = Set.empty[ActorRef]
+  
+  val persistenceActor = context.actorOf(persistenceProps)
+  
+  
   override def preStart() ={
     //Call the arbiter to join only on re first start of the actor Replica
     arbiter ! Join  
@@ -58,23 +62,33 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
   }
 
   /* TODO Behavior for  the leader role. */
+  var primaryPersistingAcks = Map.empty[Long, (ActorRef, Cancellable)]
+  
   val leader: Receive = {
     case Insert(key , value, id) => 
       kv += key -> value
-      sender ! OperationAck(id)
+      primaryPersistingAcks += id -> (sender, system.scheduler.schedule(Duration.Zero, Duration.create(100, MILLISECONDS), persistenceActor, Persist(key, Some(value), id)))
     case Remove(key,id) => 
       kv -= key
-      sender ! OperationAck(id)
+      primaryPersistingAcks += id -> (sender, system.scheduler.schedule(Duration.Zero, Duration.create(100, MILLISECONDS), persistenceActor, Persist(key, None, id)))
     case Get(key,id) =>
       val value = kv.get(key)
       sender ! GetResult(key,value,id)
-    case _ =>
+    case Persisted(key,id) =>
+      primaryPersistingAcks get id match {
+        case Some((s,c)) => 
+          c.cancel
+          primaryPersistingAcks -= id
+          s ! OperationAck(id)
+        case None => {}
+      }
+    case Replicated(key, id) =>
+    case Replicas(rl) => 
   }
 
   
   // used to check the replicator sequence
   var expectedReplicatorSequence : Long = 0
-  val persistenceActor = context.actorOf(persistenceProps)
   var secondaryPersistingAcks = Map.empty[Long, (ActorRef, Cancellable)]
   /* TODO Behavior for the replica role. */
   val replica: Receive = {
@@ -101,7 +115,6 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
           replicator ! SnapshotAck(key, id)
         case None => {}
       }
-    case _ =>
   }
 
 }

@@ -3,6 +3,7 @@ package kvstore
 import akka.actor.{ OneForOneStrategy, Props, ActorRef, Actor }
 import kvstore.Arbiter._
 import scala.collection.immutable.Queue
+import collection.mutable.{ HashMap, MultiMap, Set }
 import akka.actor.SupervisorStrategy.Restart
 import scala.annotation.tailrec
 import akka.pattern.{ ask, pipe }
@@ -63,7 +64,8 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
 
   /* TODO Behavior for  the leader role. */
   var primaryPersistingAcks = Map.empty[Long, (ActorRef, Cancellable)]
-  var replicatorAcks = Map.empty[Long,(ActorRef, Set[ActorRef])]
+  var replicatorAcks = Map.empty[Long,(ActorRef, Int)] 
+  var replicationAcks = new HashMap[ActorRef, Set[Long]] with MultiMap[ActorRef, Long]
   val leader: Receive = {
     case Insert(key , value, id) => 
       kv += key -> value
@@ -72,8 +74,9 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
       if (!replicators.isEmpty){
         replicators foreach {r =>
           r ! Replicate(key, Some(value), id)
+          replicationAcks.addBinding(r, id)
         }
-        replicatorAcks += id -> (sender,replicators)
+        replicatorAcks += id -> (sender,replicators.size)
       }
       
       system.scheduler.scheduleOnce(1 second) {
@@ -99,8 +102,9 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
       if (!replicators.isEmpty){
         replicators foreach {r =>
           r ! Replicate(key, None, id)
+          replicationAcks.addBinding(r, id)
         }
-        replicatorAcks += id -> (sender,replicators)
+        replicatorAcks += id -> (sender,replicators.size)
       }
       
       system.scheduler.scheduleOnce(1 second) {
@@ -131,11 +135,15 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
         case None => {}
       }
     case Replicated(key, id) =>
+      replicationAcks get sender match {
+        case Some(i) => i-=id 
+        case None => {}
+      }
       replicatorAcks get id match {
         case Some((s,rl)) => 
-          val newList = rl - sender
+          val newList = rl - 1
           replicatorAcks -= id
-          if (newList.isEmpty && !(primaryPersistingAcks contains id)){
+          if (newList == 0 && !(primaryPersistingAcks contains id)){
             s ! OperationAck(id)
           }
           else
@@ -144,8 +152,9 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
       }
     case Replicas(rl) => 
       val allButMe = rl - self
-      val removed = secondaries.keySet -- rl
-      allButMe foreach { a =>
+      val joined = allButMe -- secondaries.keySet
+      val removed = secondaries.keySet -- allButMe
+      joined foreach { a =>
         val replicator = context.actorOf(Replicator.props(a))
         secondaries += a -> replicator
         replicators += replicator
@@ -161,10 +170,14 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
             context.stop(replicator)
             secondaries -= r
             replicators -= replicator
-            
+             
+            replicationAcks get replicator match {
+              case Some(ids) => ids foreach { i => self ! Replicated("", i)}
+              case None => {}
+            }
           case None => {}
         }
-        }
+     }
   }
 
   

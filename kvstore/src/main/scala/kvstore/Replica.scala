@@ -13,6 +13,7 @@ import akka.actor.PoisonPill
 import akka.actor.OneForOneStrategy
 import akka.actor.SupervisorStrategy
 import akka.util.Timeout
+import akka.actor.OneForOneStrategy
 
 object Replica {
   sealed trait Operation {
@@ -50,12 +51,16 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
   
   val persistenceActor = context.actorOf(persistenceProps)
   
+  var counter = 0
   
   override def preStart() ={
     //Call the arbiter to join only on re first start of the actor Replica
     arbiter ! Join  
   }
   
+  override val supervisorStrategy = OneForOneStrategy() {
+    case _: Exception => Restart
+  }
 
   def receive = {
     case JoinedPrimary   => context.become(leader)
@@ -159,9 +164,8 @@ class Replica(val arbiter: ActorRef, persistenceProps: Props) extends Actor {
         secondaries += a -> replicator
         replicators += replicator
         
-        var c = 0
         kv foreach { case (k,v) =>
-          replicator ! Replicate(k,Some(v),c)
+          replicator ! Replicate(k,Some(v),counter)
        }
       }
       removed foreach { r =>
